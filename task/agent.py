@@ -25,7 +25,7 @@ class MASCoordinator:
 
     async def handle_request(self, choice: Choice, request: Request) -> Message:
         #TODO:
-        # 1. Create AsyncDial client
+        # 1. Create AsyncDial client (api_version='2025-01-01-preview')
         # 2. Open stage for Coordination Request (StageProcessor will help with that)
         # 3. Prepare coordination request
         # 4. Add to the stage generated coordination request and close the stage
@@ -39,7 +39,6 @@ class MASCoordinator:
         #    `response_format` https://platform.openai.com/docs/guides/structured-outputs?example=structured-data and
         #    response will be returned in JSON format. The `response_format` parameter must be provided as extra_body dict
         #    {response_format": {"type": "json_schema","json_schema": {"name": "response","schema": CoordinationRequest.model_json_schema()}}}
-        #    provide api_version="2024-08-01-preview" (required)
         # 2. Get content from response -> choice -> message -> content
         # 3. Load as dict
         # 4. Create CoordinationRequest from result, since CoordinationRequest is pydentic model, you can use `model_validate` method
