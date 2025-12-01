@@ -182,7 +182,7 @@ Prepare [docker-compose](docker-compose.yml) with all the services:
 1. Add `mas-coordinator` to applications:
     ```json
     {
-      "general-purpose-agent": {
+      "mas-coordinator": {
         "displayName": "MAS Coordinator Agent",
         "description": "MAS Coordinator Agent that coordinates user requests to General-purpose Agent or UMS Agent",
         "endpoint": "http://host.docker.internal:8055/openai/deployments/mas-coordinator/chat/completions",
