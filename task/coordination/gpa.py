@@ -23,7 +23,6 @@ class GPAGateway:
             request: Request,
             additional_instructions: Optional[str]
     ) -> Message:
-        #TODO:
         # ℹ️ Cool thing about DIAL that all the apps that implement /chat/completions endpoint within DIAL infrastructure
         #    can be openai compatible and DIAL SDK supports us with creation of such applications. So, we can use any
         #    OpenAI compatible client (from openai, azureopenai, langchain, whatever...) and communicate with it like
@@ -66,10 +65,73 @@ class GPAGateway:
         # 6. Now we need to to save information about conversation with GPA to the MASCoordinator choice state. Create
         #    dict {_IS_GPA: True, GPA_MESSAGES: result_custom_content.state} and set it to the choice state.
         # 7. Return assistant message with content
-        raise NotImplementedError()
+
+        client: AsyncDial = AsyncDial(
+            base_url=self.endpoint,
+            api_key=request.api_key,
+            api_version='2025-01-01-preview'
+        )
+        messages = self.__prepare_gpa_messages(request, additional_instructions)
+        response = await client.chat.completions.create(
+            deployment_name="general-purpose-agent",
+            messages=messages,
+            stream=True,
+            extra_headers={'x-conversation-id': request.headers.get('x-conversation-id')}
+        )
+        content = ""
+        result_custom_content = CustomContent(attachments=[])
+        stages_map: dict[int, Stage] = {}
+        async for chunk in response:
+            if chunk.choices and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                print(f"Delta received from GPA: {delta}")
+                if delta.content:
+                    content += delta.content
+                    stage.append_content(delta.content)
+                if delta.custom_content:
+
+                    if delta.custom_content.attachments:
+                        result_custom_content.attachments.extend(delta.custom_content.attachments)
+
+                    if delta.custom_content.state:
+                        if result_custom_content.state is None:
+                            result_custom_content.state = {}
+                        result_custom_content.state.update(delta.custom_content.state)
+
+                    cc_dict = delta.custom_content.dict(exclude_none=True)
+                    if stages := cc_dict.get("stages"):
+                        for stg in stages:
+                            index = stg.get('index')
+                            if index is None:
+                                continue
+                            if index in stages_map:
+                                target_stage = stages_map[index]
+                                if 'content' in stg and stg['content']:
+                                    target_stage.append_content(stg['content'])
+                                if 'attachments' in stg and stg['attachments']:
+                                    for attachment in stg['attachments']:
+                                        target_stage.add_attachment(
+                                            Attachment(**attachment)
+                                        )
+                                if 'status' in stg and stg['status'] == 'completed':
+                                    StageProcessor.close_stage_safely(target_stage)
+                            else:
+                                new_stage = StageProcessor.open_stage(choice=choice, name=stg.get('name', f"GPA Stage {index}"))
+                                stages_map[index] = new_stage
+
+        if result_custom_content.attachments:
+            for attachment in result_custom_content.attachments:
+                choice.add_attachment(
+                    Attachment(**attachment.dict(exclude_none=True))
+                )
+        if result_custom_content.state is not None:
+            choice.set_state({
+                _IS_GPA: True,
+                _GPA_MESSAGES: result_custom_content.state
+            })
+        return Message(role=Role.ASSISTANT, content=StrictStr(content))
 
     def __prepare_gpa_messages(self, request: Request, additional_instructions: Optional[str]) -> list[dict[str, Any]]:
-        #TODO:
         # 1. Create `res_messages` empty array, here we will collect all the messages that are related to the GPA agent
         # 2. Make for i loop through range of len of request messages and:
         #       - if it is assistant message then:
@@ -83,4 +145,23 @@ class GPAGateway:
         # 3. Add last message from `additional_instructions` (it will be user message) as dict with none excluded
         # 4. If `additional_instructions` are present we need to make augmentation for last message content in the `res_messages`
         # 5. Return `res_messages`
-        raise NotImplementedError()
+        res_messages: list[dict[str, Any]] = []
+        for idx in range(len(request.messages)):
+            msg = request.messages[idx]
+            if msg.role == Role.ASSISTANT:
+                if msg.custom_content and msg.custom_content.state:
+                    state = msg.custom_content.state
+                    if _IS_GPA in state and state[_IS_GPA]:
+                        # Add user message before assistant
+                        res_messages.append(request.messages[idx - 1].dict(exclude_none=True))
+                        # Add assistant message with GPA state
+                        assistant_msg_copy = deepcopy(msg)
+                        if assistant_msg_copy.custom_content and assistant_msg_copy.custom_content.state:
+                            assistant_msg_copy.custom_content.state = state.get(_GPA_MESSAGES, {})
+                        res_messages.append(assistant_msg_copy.dict(exclude_none=True))
+        # Add last user message with additional instructions
+        last_user_message = request.messages[-1].dict(exclude_none=True)
+        res_messages.append(last_user_message)
+        if additional_instructions:
+            res_messages[-1]['content'] += f"\n\n{additional_instructions}"
+        return res_messages
